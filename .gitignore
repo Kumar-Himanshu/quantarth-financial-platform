@@ -14,10 +14,6 @@ target/
 */target/
 .gradletasknamecache
 
-# Explicitly track Gradle Wrapper binaries & configuration
-!gradle/wrapper/gradle-wrapper.jar
-!gradle/wrapper/gradle-wrapper.properties
-
 # Java Class & Archive Files
 *.class
 *.jar
@@ -27,6 +23,12 @@ target/
 *.zip
 *.tar.gz
 *.rar
+
+# Explicitly track Gradle Wrapper binaries & configuration (must be after *.jar)
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+!**/gradle/wrapper/gradle-wrapper.jar
+!**/gradle/wrapper/gradle-wrapper.properties
 
 # Python (AI Service)
 __pycache__/

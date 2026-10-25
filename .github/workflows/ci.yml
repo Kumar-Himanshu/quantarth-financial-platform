@@ -85,10 +85,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Pytest Suite
-        working-directory: ./ai-service
+      - name: Run Python Tests
+        working-directory: ai-service
+        env:
+          PYTHONPATH: .
         run: |
-          pytest -v --junitxml=pytest-results.xml tests/
+          python -m pytest -v --junitxml=pytest-results.xml tests/
 
       - name: Upload Python Test Reports
         if: always()
