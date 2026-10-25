@@ -24,6 +24,7 @@ import org.springframework.amqp.core.AmqpAdmin;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -74,8 +75,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @Testcontainers
 class PostgresAndRabbitMQInfrastructureIntegrationTest {
 
-    private static final String GATEWAY_SECRET = GatewaySecurityConstants.DEFAULT_GATEWAY_TOKEN;
-    private static final String ACTIVE_KEY_ID = "v1";
+    @Value("${gateway.internal.active-key-id:v1}")
+    private String activeKeyId;
+
+    @Value("${gateway.internal.secret:${GATEWAY_INTERNAL_SECRET:" + GatewaySecurityConstants.DEFAULT_GATEWAY_TOKEN + "}}")
+    private String gatewaySecret;
 
     @Container
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
@@ -141,7 +145,7 @@ class PostgresAndRabbitMQInfrastructureIntegrationTest {
         TenantContext.clear();
         eventRepository.deleteAll();
         outboxRepository.deleteAll();
-        signer = new RequestHmacSigner(ACTIVE_KEY_ID, Map.of(ACTIVE_KEY_ID, GATEWAY_SECRET));
+        signer = new RequestHmacSigner(activeKeyId, Map.of(activeKeyId, gatewaySecret));
     }
 
     @AfterEach
@@ -162,14 +166,14 @@ class PostgresAndRabbitMQInfrastructureIntegrationTest {
         String nonce = UUID.randomUUID().toString();
         String bodyDigest = RequestHmacSigner.computeSha256Hex(body);
         String signature = signer.sign(
-                ACTIVE_KEY_ID, method, path, query != null ? query : "",
+                activeKeyId, method, path, query != null ? query : "",
                 subject != null ? subject : "", userId != null ? userId : "",
                 tenantId != null ? tenantId : "", roles != null ? roles : "",
                 timestamp, nonce, bodyDigest
         );
 
         return builder
-                .header(GatewaySecurityConstants.HEADER_GATEWAY_KEY_ID, ACTIVE_KEY_ID)
+                .header(GatewaySecurityConstants.HEADER_GATEWAY_KEY_ID, activeKeyId)
                 .header(GatewaySecurityConstants.HEADER_GATEWAY_TIMESTAMP, String.valueOf(timestamp))
                 .header(GatewaySecurityConstants.HEADER_GATEWAY_NONCE, nonce)
                 .header(GatewaySecurityConstants.HEADER_GATEWAY_SIGNATURE, signature)

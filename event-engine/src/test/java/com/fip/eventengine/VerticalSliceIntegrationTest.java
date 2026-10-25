@@ -8,15 +8,18 @@ import com.fip.eventengine.adapters.out.persistence.EventOutboxJpaRepository;
 import com.fip.eventengine.adapters.out.persistence.FinancialEventJpaEntity;
 import com.fip.eventengine.adapters.out.persistence.FinancialEventJpaRepository;
 import com.fip.eventengine.service.OutboxPollingPublisher;
+import com.fip.common.tenant.TenantContext;
 import com.fip.shared.events.CanonicalEvent;
 import com.fip.shared.security.GatewaySecurityConstants;
 import com.fip.shared.security.RequestHmacSigner;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -43,8 +46,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class VerticalSliceIntegrationTest {
 
-    private static final String GATEWAY_SECRET = GatewaySecurityConstants.DEFAULT_GATEWAY_TOKEN;
-    private static final String ACTIVE_KEY_ID = "v1";
+    @Value("${gateway.internal.active-key-id:v1}")
+    private String activeKeyId;
+
+    @Value("${gateway.internal.secret:${GATEWAY_INTERNAL_SECRET:" + GatewaySecurityConstants.DEFAULT_GATEWAY_TOKEN + "}}")
+    private String gatewaySecret;
 
     @Autowired
     private MockMvc mockMvc;
@@ -71,9 +77,10 @@ class VerticalSliceIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        TenantContext.clear();
         repository.deleteAll();
         outboxRepository.deleteAll();
-        signer = new RequestHmacSigner(ACTIVE_KEY_ID, Map.of(ACTIVE_KEY_ID, GATEWAY_SECRET));
+        signer = new RequestHmacSigner(activeKeyId, Map.of(activeKeyId, gatewaySecret));
 
         // Default mock behavior for rabbitTemplate: acknowledge correlationData future
         doAnswer(invocation -> {
@@ -83,6 +90,11 @@ class VerticalSliceIntegrationTest {
             }
             return null;
         }).when(rabbitTemplate).convertAndSend(any(String.class), any(String.class), any(String.class), any(CorrelationData.class));
+    }
+
+    @AfterEach
+    void tearDown() {
+        TenantContext.clear();
     }
 
     private MockHttpServletRequestBuilder withHmac(MockHttpServletRequestBuilder builder,
@@ -98,14 +110,14 @@ class VerticalSliceIntegrationTest {
         String nonce = UUID.randomUUID().toString();
         String bodyDigest = RequestHmacSigner.computeSha256Hex(body);
         String signature = signer.sign(
-                ACTIVE_KEY_ID, method, path, query != null ? query : "",
+                activeKeyId, method, path, query != null ? query : "",
                 subject != null ? subject : "", userId != null ? userId : "",
                 tenantId != null ? tenantId : "", roles != null ? roles : "",
                 timestamp, nonce, bodyDigest
         );
 
         return builder
-                .header(GatewaySecurityConstants.HEADER_GATEWAY_KEY_ID, ACTIVE_KEY_ID)
+                .header(GatewaySecurityConstants.HEADER_GATEWAY_KEY_ID, activeKeyId)
                 .header(GatewaySecurityConstants.HEADER_GATEWAY_TIMESTAMP, String.valueOf(timestamp))
                 .header(GatewaySecurityConstants.HEADER_GATEWAY_NONCE, nonce)
                 .header(GatewaySecurityConstants.HEADER_GATEWAY_SIGNATURE, signature)
@@ -144,7 +156,7 @@ class VerticalSliceIntegrationTest {
         String eventPayload = "{\"eventType\":\"InvoiceProcessed\",\"eventSource\":\"document-ai\",\"payload\":\"{\\\"amount\\\":1000}\"}";
 
         mockMvc.perform(post("/api/v1/events/publish")
-                        .header(GatewaySecurityConstants.HEADER_GATEWAY_KEY_ID, "v1")
+                        .header(GatewaySecurityConstants.HEADER_GATEWAY_KEY_ID, activeKeyId)
                         .header(GatewaySecurityConstants.HEADER_GATEWAY_TIMESTAMP, String.valueOf(System.currentTimeMillis()))
                         .header(GatewaySecurityConstants.HEADER_GATEWAY_NONCE, UUID.randomUUID().toString())
                         .header(GatewaySecurityConstants.HEADER_GATEWAY_SIGNATURE, "forged-invalid-hmac-signature-hex")
@@ -168,11 +180,11 @@ class VerticalSliceIntegrationTest {
         long timestamp = System.currentTimeMillis();
         String nonce = UUID.randomUUID().toString();
         String originalDigest = RequestHmacSigner.computeSha256Hex(originalPayload.getBytes());
-        String signature = signer.sign("v1", "POST", "/api/v1/events/publish", "", "analyst", "u1", "tenant-alpha", "ROLE_ANALYST", timestamp, nonce, originalDigest);
+        String signature = signer.sign(activeKeyId, "POST", "/api/v1/events/publish", "", "analyst", "u1", "tenant-alpha", "ROLE_ANALYST", timestamp, nonce, originalDigest);
 
         // Attacker sends tampered payload with original signature
         mockMvc.perform(post("/api/v1/events/publish")
-                        .header(GatewaySecurityConstants.HEADER_GATEWAY_KEY_ID, "v1")
+                        .header(GatewaySecurityConstants.HEADER_GATEWAY_KEY_ID, activeKeyId)
                         .header(GatewaySecurityConstants.HEADER_GATEWAY_TIMESTAMP, String.valueOf(timestamp))
                         .header(GatewaySecurityConstants.HEADER_GATEWAY_NONCE, nonce)
                         .header(GatewaySecurityConstants.HEADER_GATEWAY_SIGNATURE, signature)
@@ -193,10 +205,10 @@ class VerticalSliceIntegrationTest {
         long expiredTimestamp = System.currentTimeMillis() - 70_000L; // 70 seconds ago
         String nonce = UUID.randomUUID().toString();
         String bodyDigest = RequestHmacSigner.computeSha256Hex(eventPayload.getBytes());
-        String signature = signer.sign("v1", "POST", "/api/v1/events/publish", "", "analyst", "u1", "tenant-alpha", "ROLE_ANALYST", expiredTimestamp, nonce, bodyDigest);
+        String signature = signer.sign(activeKeyId, "POST", "/api/v1/events/publish", "", "analyst", "u1", "tenant-alpha", "ROLE_ANALYST", expiredTimestamp, nonce, bodyDigest);
 
         mockMvc.perform(post("/api/v1/events/publish")
-                        .header(GatewaySecurityConstants.HEADER_GATEWAY_KEY_ID, "v1")
+                        .header(GatewaySecurityConstants.HEADER_GATEWAY_KEY_ID, activeKeyId)
                         .header(GatewaySecurityConstants.HEADER_GATEWAY_TIMESTAMP, String.valueOf(expiredTimestamp))
                         .header(GatewaySecurityConstants.HEADER_GATEWAY_NONCE, nonce)
                         .header(GatewaySecurityConstants.HEADER_GATEWAY_SIGNATURE, signature)
@@ -217,11 +229,11 @@ class VerticalSliceIntegrationTest {
         long timestamp = System.currentTimeMillis();
         String reusedNonce = "replayed-nonce-" + UUID.randomUUID();
         String bodyDigest = RequestHmacSigner.computeSha256Hex(eventPayload.getBytes());
-        String signature = signer.sign("v1", "POST", "/api/v1/events/publish", "", "analyst", "u1", "tenant-alpha", "ROLE_ANALYST", timestamp, reusedNonce, bodyDigest);
+        String signature = signer.sign(activeKeyId, "POST", "/api/v1/events/publish", "", "analyst", "u1", "tenant-alpha", "ROLE_ANALYST", timestamp, reusedNonce, bodyDigest);
 
         // First request succeeds
         mockMvc.perform(post("/api/v1/events/publish")
-                        .header(GatewaySecurityConstants.HEADER_GATEWAY_KEY_ID, "v1")
+                        .header(GatewaySecurityConstants.HEADER_GATEWAY_KEY_ID, activeKeyId)
                         .header(GatewaySecurityConstants.HEADER_GATEWAY_TIMESTAMP, String.valueOf(timestamp))
                         .header(GatewaySecurityConstants.HEADER_GATEWAY_NONCE, reusedNonce)
                         .header(GatewaySecurityConstants.HEADER_GATEWAY_SIGNATURE, signature)
@@ -236,7 +248,7 @@ class VerticalSliceIntegrationTest {
 
         // Replay attempt with same nonce fails
         mockMvc.perform(post("/api/v1/events/publish")
-                        .header(GatewaySecurityConstants.HEADER_GATEWAY_KEY_ID, "v1")
+                        .header(GatewaySecurityConstants.HEADER_GATEWAY_KEY_ID, activeKeyId)
                         .header(GatewaySecurityConstants.HEADER_GATEWAY_TIMESTAMP, String.valueOf(timestamp))
                         .header(GatewaySecurityConstants.HEADER_GATEWAY_NONCE, reusedNonce)
                         .header(GatewaySecurityConstants.HEADER_GATEWAY_SIGNATURE, signature)
