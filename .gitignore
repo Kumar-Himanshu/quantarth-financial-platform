@@ -6,13 +6,17 @@
 .gradle/
 build/
 bin/
-out/
+/out/
+*/out/
 target/
 */build/
 */bin/
-*/out/
 */target/
 .gradletasknamecache
+
+# Never ignore source code in Hexagonal Architecture (ports/out, adapters/out)
+!**/src/**/out/
+!**/src/**/out/**
 
 # Java Class & Archive Files
 *.class
