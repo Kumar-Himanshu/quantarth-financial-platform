@@ -1,0 +1,75 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowedOrigins: "*"
+            allowedMethods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - PATCH
+              - OPTIONS
+            allowedHeaders: "*"
+      routes:
+        # Auth Service (Public endpoints: register, login, refresh)
+        - id: auth-service
+          uri: ${AUTH_SERVICE_URI:http://localhost:8081}
+          predicates:
+            - Path=/api/v1/auth/**
+          filters:
+            - name: RateLimitingFilter
+              args:
+                capacity: 60
+
+        # Plugin Framework (Protected by JWT and Rate Limit)
+        - id: plugin-framework
+          uri: ${PLUGIN_FRAMEWORK_URI:http://localhost:8082}
+          predicates:
+            - Path=/api/v1/plugins/**
+          filters:
+            - name: RateLimitingFilter
+              args:
+                capacity: 120
+            - name: JwtValidationFilter
+
+        # Event Engine (Protected by JWT and Rate Limit)
+        - id: event-engine
+          uri: ${EVENT_ENGINE_URI:http://localhost:8083}
+          predicates:
+            - Path=/api/v1/events/**
+          filters:
+            - name: RateLimitingFilter
+              args:
+                capacity: 300
+            - name: JwtValidationFilter
+
+        # AI Service (Protected by JWT and Rate Limit)
+        - id: ai-service
+          uri: ${AI_SERVICE_URI:http://localhost:8000}
+          predicates:
+            - Path=/api/v1/ai/**
+          filters:
+            - name: RateLimitingFilter
+              args:
+                capacity: 100
+            - name: JwtValidationFilter
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
+
+jwt:
+  secret: ${JWT_SECRET:9a2f3f4g5h6j7k8l9m0n1b2v3c4x5z6p7q8w9e0r1t2y3u4i5o6p7a8s9d0f1g2h}

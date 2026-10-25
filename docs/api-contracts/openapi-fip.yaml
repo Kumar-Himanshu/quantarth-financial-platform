@@ -1,0 +1,379 @@
+openapi: 3.0.3
+info:
+  title: Financial Intelligence Platform (FIP) - Consolidated API
+  description: Enterprise OpenAPI specification for FIP core microservices platform.
+  version: 1.0.0
+  contact:
+    name: Principal Software Architect & Backend Engineering Team
+    email: architecture@fip.internal
+
+servers:
+  - url: http://localhost:8080
+    description: API Gateway Entrypoint
+  - url: https://api.fip.company.com
+    description: Production Gateway
+
+paths:
+  # ===========================================================================
+  # AUTH SERVICE ENDPOINTS
+  # ===========================================================================
+  /api/v1/auth/register:
+    post:
+      tags:
+        - Authentication
+      summary: Register a new user
+      description: Creates user with assigned RBAC roles and tenant context, emits UserRegistered event.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password, email]
+              properties:
+                username: { type: string, minLength: 4, maxLength: 50 }
+                password: { type: string, minLength: 6 }
+                email: { type: string, format: email }
+                roles: { type: array, items: { type: string } }
+                tenantId: { type: string, default: "default" }
+      responses:
+        '201':
+          description: User successfully registered
+        '400':
+          $ref: '#/components/responses/ProblemDetail400'
+
+  /api/v1/auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: Authenticate user credentials
+      description: Validates credentials, returns JWT Access Token (with RBAC roles & permissions) and Refresh Token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        '200':
+          description: Authentication successful
+        '401':
+          $ref: '#/components/responses/ProblemDetail401'
+
+  /api/v1/auth/refresh:
+    post:
+      tags:
+        - Authentication
+      summary: Rotate refresh token and issue new access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200':
+          description: Tokens successfully rotated
+        '401':
+          $ref: '#/components/responses/ProblemDetail401'
+
+  # ===========================================================================
+  # PLUGIN FRAMEWORK ENDPOINTS
+  # ===========================================================================
+  /api/v1/plugins:
+    get:
+      tags:
+        - Plugin Framework
+      summary: List all registered plugins
+      responses:
+        '200':
+          description: List of plugin metadata
+    post:
+      tags:
+        - Plugin Framework
+      summary: Register a new plugin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, version, mainClass, jarPath]
+              properties:
+                name: { type: string }
+                version: { type: string }
+                provider: { type: string }
+                description: { type: string }
+                mainClass: { type: string }
+                jarPath: { type: string }
+                checksumSha256: { type: string }
+                capabilities: { type: string }
+      responses:
+        '201':
+          description: Plugin successfully registered
+
+  /api/v1/plugins/{name}/execute:
+    post:
+      tags:
+        - Plugin Framework
+      summary: Execute active plugin in sandbox environment
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action: { type: string }
+                payload: { type: string }
+      responses:
+        '200':
+          description: Plugin execution successful
+
+  # ===========================================================================
+  # EVENT ENGINE ENDPOINTS
+  # ===========================================================================
+  /api/v1/events/publish:
+    post:
+      tags:
+        - Event Engine
+      summary: Ingest and publish canonical financial event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [eventType, eventSource, payload]
+              properties:
+                eventType: { type: string }
+                eventSource: { type: string }
+                payload: { type: string }
+                traceId: { type: string }
+                tenantId: { type: string }
+                version: { type: string }
+      responses:
+        '201':
+          description: Event persisted and broadcast to RabbitMQ
+
+  /api/v1/events/search:
+    get:
+      tags:
+        - Event Engine
+      summary: Search persisted financial audit events
+      parameters:
+        - name: eventType
+          in: query
+          schema: { type: string }
+        - name: eventSource
+          in: query
+          schema: { type: string }
+        - name: tenantId
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Filtered list of financial events
+
+  # ===========================================================================
+  # AI SERVICE ENDPOINTS
+  # ===========================================================================
+  /api/v1/ai/ocr:
+    post:
+      tags:
+        - AI Service
+      summary: Optical Character Recognition (OCR) extraction
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200':
+          description: Extracted text and bounding boxes
+
+  /api/v1/ai/yolo:
+    post:
+      tags:
+        - AI Service
+      summary: Document layout detection via YOLO
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200':
+          description: Detected visual layout regions
+
+  /api/v1/ai/ner:
+    post:
+      tags:
+        - AI Service
+      summary: Named Entity Recognition (NER)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string }
+      responses:
+        '200':
+          description: Extracted financial entities (MONEY, DATE, ORG, TAX_ID)
+
+  /api/v1/ai/classify:
+    post:
+      tags:
+        - AI Service
+      summary: Document type classification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string }
+      responses:
+        '200':
+          description: Document classification probabilities
+
+  /api/v1/ai/merchant:
+    post:
+      tags:
+        - AI Service
+      summary: Merchant detection and MCC normalization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [raw_text]
+              properties:
+                raw_text: { type: string }
+      responses:
+        '200':
+          description: Merchant details and category code
+
+  /api/v1/ai/category:
+    post:
+      tags:
+        - AI Service
+      summary: Expense category detection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [narration, amount]
+              properties:
+                narration: { type: string }
+                amount: { type: number }
+                merchant_name: { type: string }
+      responses:
+        '200':
+          description: Primary and sub-category categorization
+
+  /api/v1/ai/recommendation:
+    post:
+      tags:
+        - AI Service
+      summary: Financial risk scoring and intelligence recommendations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [document_type, amount, merchant_name, category]
+              properties:
+                document_type: { type: string }
+                amount: { type: number }
+                merchant_name: { type: string }
+                category: { type: string }
+                tax_amount: { type: number }
+      responses:
+        '200':
+          description: Risk score and recommendations
+
+  /api/v1/ai/confidence:
+    post:
+      tags:
+        - AI Service
+      summary: Aggregate pipeline confidence scoring
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ocr_confidence, yolo_confidence, ner_confidence, classification_confidence, fields_extracted_count]
+              properties:
+                ocr_confidence: { type: number }
+                yolo_confidence: { type: number }
+                ner_confidence: { type: number }
+                classification_confidence: { type: number }
+                fields_extracted_count: { type: integer }
+                fields_expected_count: { type: integer, default: 5 }
+      responses:
+        '200':
+          description: Aggregate score and human-in-the-loop flag
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    ProblemDetail400:
+      description: Bad Request (RFC 7807)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+    ProblemDetail401:
+      description: Unauthorized (RFC 7807)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+  schemas:
+    ProblemDetail:
+      type: object
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        timestamp: { type: string, format: date-time }
+        errors: { type: object, additionalProperties: { type: string } }
+
+security:
+  - BearerAuth: []

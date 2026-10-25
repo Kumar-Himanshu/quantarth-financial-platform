@@ -1,0 +1,8 @@
+rootProject.name = 'financial-platform'
+
+include 'common-library'
+include 'shared-contracts'
+include 'api-gateway'
+include 'auth-service'
+include 'plugin-framework'
+include 'event-engine'

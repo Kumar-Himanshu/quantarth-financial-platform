@@ -1,0 +1,12 @@
+spring:
+  application:
+    name: api-gateway-test
+
+jwt:
+  secret: 9a2f3f4g5h6j7k8l9m0n1b2v3c4x5z6p7q8w9e0r1t2y3u4i5o6p7a8s9d0f1g2h
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

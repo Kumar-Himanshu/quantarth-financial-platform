@@ -1,0 +1,111 @@
+# =============================================================================
+# QuantArth Financial Intelligence Platform (FIP) - Git Ignore Configuration
+# =============================================================================
+
+# Gradle & Build Artifacts
+.gradle/
+build/
+bin/
+out/
+target/
+*/build/
+*/bin/
+*/out/
+*/target/
+.gradletasknamecache
+
+# Explicitly track Gradle Wrapper binaries & configuration
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# Java Class & Archive Files
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+*.zip
+*.tar.gz
+*.rar
+
+# Python (AI Service)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Environment, Local Configurations & Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.p12
+*.jks
+*.crt
+*.cert
+*.secret
+!.env.example
+
+# Logs & Diagnostics
+*.log
+logs/
+*/logs/
+hs_err_pid*
+replay_pid*
+
+# IDE & Editor Specific Files
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# Eclipse
+.classpath
+.project
+.settings/
+
+# Operating System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Database / Storage Volumes
+postgres_data/
+*.db
+*.sqlite3

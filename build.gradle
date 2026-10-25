@@ -1,0 +1,56 @@
+plugins {
+    id 'org.springframework.boot' version '3.3.1' apply false
+    id 'io.spring.dependency-management' version '1.1.5' apply false
+    id 'java'
+}
+
+allprojects {
+    group = 'com.fip'
+    version = '1.0.0'
+
+    repositories {
+        mavenCentral()
+    }
+}
+
+subprojects {
+    apply plugin: 'java'
+    apply plugin: 'io.spring.dependency-management'
+
+    java {
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
+    }
+
+    tasks.withType(JavaCompile).configureEach {
+        options.compilerArgs += ['-parameters']
+    }
+
+    dependencyManagement {
+        imports {
+            mavenBom "org.springframework.boot:spring-boot-dependencies:3.3.1"
+            mavenBom "org.springframework.cloud:spring-cloud-dependencies:2023.0.2"
+        }
+    }
+
+    dependencies {
+        // Lombok & MapStruct
+        compileOnly 'org.mapstruct:mapstruct:1.5.5.Final'
+        annotationProcessor 'org.mapstruct:mapstruct-processor:1.5.5.Final'
+
+        // Testing Standard
+        testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+        testImplementation 'org.mockito:mockito-junit-jupiter:5.14.2'
+        testImplementation 'org.assertj:assertj-core:3.25.3'
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    }
+
+    test {
+        useJUnitPlatform()
+        jvmArgs("-Dnet.bytebuddy.experimental=true")
+        testLogging {
+            events "passed", "skipped", "failed"
+        }
+    }
+}
+
