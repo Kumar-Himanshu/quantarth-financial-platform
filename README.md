@@ -169,13 +169,19 @@ Or execute directly with Docker Compose:
 docker compose up -d --build
 ```
 
-### Local Build & Test Without Docker
+### Local Build & Test Execution
 ```powershell
 # Build all microservices
 .\gradlew.bat build -x test
 
-# Run all 51 automated unit, integration, and security tests across services
+# Run all 51 automated unit and mock slice tests (executable anywhere without Docker)
 .\gradlew.bat test
+
+# Run real infrastructure integration tests with Testcontainers (requires Docker Engine)
+.\gradlew.bat integrationTest
+
+# Run all checks (both unit and integration tests)
+.\gradlew.bat check
 ```
 
 ### Active Endpoints & Dashboards
@@ -191,27 +197,22 @@ docker compose up -d --build
 
 ---
 
-## 6. Testing & Quality Assurance
+## 6. Testing, CI/CD & Quality Assurance
 
-Run the comprehensive unit, security, and integration test suites:
+### Continuous Integration (GitHub Actions)
+The repository includes an enterprise CI pipeline in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) executing automatically on pushes and pull requests to `main`:
+1. **Java Multi-Module Build & Unit Tests**: Compiles all 6 Java modules and executes 51 unit tests.
+2. **Python FastAPI Tests**: Installs dependencies and runs 9 Pytest tests in `ai-service/`.
+3. **Infrastructure Integration Tests**: Uses Testcontainers on `ubuntu-latest` with real PostgreSQL 16 Alpine and RabbitMQ 3.13 containers.
 
-**On Linux / macOS:**
-```bash
-./scripts/run-tests.sh
-```
-
-**On Windows (PowerShell):**
-```powershell
-.\scripts\run-tests.ps1
-```
-
-### Test Coverage Highlights (51 Automated Java Tests + 8 FastAPI Tests)
+### Test Coverage Highlights
 - **Auth Service (12 tests)**: `AuthControllerTest`, `AuthServiceTest` covering public UUID tenant registration, tenant takeover attempt rejection, invitation token HMAC verification, token tampering rejection, concurrent tenant registration uniqueness, and JWT rotation.
 - **API Gateway (4 tests)**: `JwtValidationFilterTest` verifying spoofed header stripping, JWT claim validation, and request-bound HMAC-SHA256 signature injection.
 - **Shared Contracts (5 tests)**: `RequestHmacSignerTest` asserting HMAC canonical signing, parameter tampering rejection, sliding-window nonce replay rejection, clock skew enforcement, and key rotation.
-- **Event Engine (26 tests)**: `VerticalSliceIntegrationTest`, `RabbitMQEventListenerTest`, `EventControllerTest`, `EventIngestionServiceTest` covering HMAC bypass rejection, forged signature rejection, tampered body rejection, expired timestamp rejection, replayed nonce rejection, multi-tenant isolation (404), RBAC enforcement (403), outbox broker ACK publisher confirms, broker NACK exponential backoff, abandoned claim recovery, operational recovery, and durable consumer idempotency.
+- **Event Engine Unit & Slice (26 tests)**: `VerticalSliceIntegrationTest`, `RabbitMQEventListenerTest`, `EventControllerTest`, `EventIngestionServiceTest` covering HMAC bypass rejection, forged signature rejection, tampered body rejection, expired timestamp rejection, replayed nonce rejection, multi-tenant isolation (404), RBAC enforcement (403), outbox broker ACK publisher confirms, broker NACK exponential backoff, abandoned claim recovery, operational recovery, and durable consumer idempotency.
+- **Event Engine Real Infrastructure (14 scenarios)**: `PostgresAndRabbitMQInfrastructureIntegrationTest` running on real PostgreSQL 16 and RabbitMQ 3.13 containers via Testcontainers.
 - **Plugin Framework (4 tests)**: `PluginLifecycleServiceTest`, sandbox execution, status transitions (`ACTIVE`, `SUSPENDED`).
-- **AI Service (8 tests)**: `test_ai_endpoints.py` covering all 8 FastAPI endpoints with Pytest.
+- **AI Service (9 tests)**: `test_ai_endpoints.py` covering health and all 8 FastAPI endpoints with Pytest.
 
 ---
 

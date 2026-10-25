@@ -1,62 +1,72 @@
-name: Financial Intelligence Platform CI/CD
+name: QuantArth FIP CI/CD Pipeline
 
 on:
   push:
-    branches: [ "main", "develop" ]
+    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  JWT_SECRET: "ci_test_jwt_secret_quantarth_fip_minimum_64_characters_super_secure"
+  GATEWAY_INTERNAL_SECRET: "ci_test_internal_mesh_secret_2026_min_32_characters"
 
 jobs:
-  build-and-test-java:
-    name: Build & Test Java Microservices
+  # ===========================================================================
+  # 1. Java Multi-Module Build & Unit Tests
+  # ===========================================================================
+  java-unit-tests:
+    name: Java Build & Unit Tests
     runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-      rabbitmq:
-        image: rabbitmq:3.13-alpine
-        ports:
-          - 5672:5672
-        options: >-
-          --health-cmd "rabbitmq-diagnostics -q check_running"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+    timeout-minutes: 15
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Java 21
+      - name: Set up Java 21 LTS
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '21'
 
+      - name: Grant Execute Permission for Gradle Wrapper
+        run: chmod +x ./gradlew
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Build with Gradle
-        run: gradle build --no-daemon
+      - name: Compile Java Modules
+        run: ./gradlew compileJava compileTestJava --no-daemon
 
-      - name: Execute Tests & Generate Reports
-        run: gradle test --no-daemon
+      - name: Execute Java Unit Tests
+        run: ./gradlew test --no-daemon
 
-  build-and-test-python:
-    name: Build & Test AI Service (FastAPI)
+      - name: Upload Java Unit Test Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-unit-test-reports
+          path: |
+            **/build/reports/tests/test/
+            **/build/test-results/test/
+          retention-days: 14
+
+  # ===========================================================================
+  # 2. Python FastAPI Tests (AI Service)
+  # ===========================================================================
+  python-fastapi-tests:
+    name: Python FastAPI AI Service Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout Code
@@ -66,14 +76,65 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'ai-service/requirements.txt'
 
-      - name: Install Dependencies
+      - name: Install Python Dependencies
         working-directory: ./ai-service
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Pytest Suite with Coverage
+      - name: Run Pytest Suite
         working-directory: ./ai-service
         run: |
-          pytest -v tests/
+          pytest -v --junitxml=pytest-results.xml tests/
+
+      - name: Upload Python Test Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-pytest-reports
+          path: ai-service/pytest-results.xml
+          retention-days: 14
+
+  # ===========================================================================
+  # 3. Real Infrastructure Integration Tests (PostgreSQL 16 & RabbitMQ 3.13)
+  # ===========================================================================
+  infrastructure-integration-tests:
+    name: Infrastructure Integration Tests (Testcontainers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [ java-unit-tests ]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21 LTS
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Grant Execute Permission for Gradle Wrapper
+        run: chmod +x ./gradlew
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Verify Docker Daemon Availability
+        run: docker info
+
+      - name: Execute Infrastructure Integration Tests
+        run: ./gradlew integrationTest --no-daemon --stacktrace
+
+      - name: Upload Integration Test Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: infrastructure-integration-test-reports
+          path: |
+            **/build/reports/tests/integrationTest/
+            **/build/test-results/integrationTest/
+          retention-days: 14

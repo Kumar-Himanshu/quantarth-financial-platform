@@ -46,11 +46,26 @@ subprojects {
     }
 
     test {
-        useJUnitPlatform()
+        useJUnitPlatform {
+            excludeTags 'integration'
+        }
         jvmArgs("-Dnet.bytebuddy.experimental=true")
         testLogging {
             events "passed", "skipped", "failed"
         }
+    }
+
+    tasks.register('integrationTest', Test) {
+        description = 'Runs infrastructure-backed integration tests with Testcontainers.'
+        group = 'verification'
+        useJUnitPlatform {
+            includeTags 'integration'
+        }
+        jvmArgs("-Dnet.bytebuddy.experimental=true")
+        testLogging {
+            events "passed", "skipped", "failed"
+        }
+        shouldRunAfter test
     }
 }
 
