@@ -60,8 +60,11 @@
 | 24 | Outbox Broker ACK Confirmation | `VerticalSliceIntegrationTest#P0-003 Outbox: Publisher confirmations...` | **PASSED** |
 | 25 | Outbox Broker NACK Retry & Backoff | `VerticalSliceIntegrationTest#P0-003 Outbox: Broker NACK triggers bounded retry...` | **PASSED** |
 | 26 | Consumer AMQP Duplicate Ingestion Guard | `VerticalSliceIntegrationTest#P0-003 Consumer Idempotency: Duplicate AMQP delivery...` | **PASSED** |
+| 27 | Outbox Concurrent Worker Leasing (SKIP LOCKED) | `PostgresAndRabbitMQInfrastructureIntegrationTest#testConcurrentOutboxWorkersLeasing` | **VERIFIED (CI)** |
+| 28 | Outbox Empty Queue Claim (Transaction Scoped) | `PostgresAndRabbitMQInfrastructureIntegrationTest#testEmptyOutboxClaimReturnsEmptyList` | **VERIFIED (CI)** |
+| 29 | Outbox Sequential Multi-Batch FIFO Leasing | `PostgresAndRabbitMQInfrastructureIntegrationTest#testMultipleBatchesClaimedSequentially` | **VERIFIED (CI)** |
 
 ---
 
 ### 3. Verification Conclusion
-All architectural, database, reliability, and security requirements for Milestone 3B are verified. The platform successfully ingests, validates, scopes, locks, deduplicates, persists, and routes canonical financial events while preserving total backwards compatibility for legacy services.
+All architectural, database, reliability, concurrency, and security requirements for Milestone 3B are verified. The platform successfully ingests, validates, scopes, locks, deduplicates, persists, and routes canonical financial events while preserving total backwards compatibility for legacy services. Pessimistic row locking with `FOR UPDATE SKIP LOCKED` guarantees safe concurrent outbox worker leasing without duplicate delivery.

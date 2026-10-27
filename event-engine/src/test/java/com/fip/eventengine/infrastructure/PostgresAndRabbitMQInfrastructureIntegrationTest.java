@@ -390,10 +390,12 @@ class PostgresAndRabbitMQInfrastructureIntegrationTest {
     @Test
     @DisplayName("5.1 PostgreSQL: Empty outbox queue returns empty list without error")
     void testEmptyOutboxClaimReturnsEmptyList() {
-        List<EventOutboxJpaEntity> claimed = outboxRepository.findClaimableRecords(
-                LocalDateTime.now(), LocalDateTime.now().minusSeconds(60), PageRequest.of(0, 10)
+        List<EventOutboxJpaEntity> claimed = transactionTemplate.execute(status ->
+                outboxRepository.findClaimableRecords(
+                        LocalDateTime.now(), LocalDateTime.now().minusSeconds(60), PageRequest.of(0, 10)
+                )
         );
-        assertThat(claimed).isEmpty();
+        assertThat(claimed).isNotNull().isEmpty();
     }
 
     @Test
