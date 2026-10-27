@@ -123,8 +123,10 @@ financial-platform/
 │   └── requirements.txt
 ├── common-library/              # Reusable cross-cutting domain components
 │   └── src/main/java/com/fip/common/  # StandardResponse, AuditModel, RFC 7807 Exceptions
-├── shared-contracts/            # Shared SDK & canonical event models
-│   └── src/main/java/com/fip/shared/  # CanonicalEvent, EventTopics, FipPlugin SDK
+├── shared-contracts/            # Shared SDK & Canonical Financial Models
+│   └── src/main/java/com/fip/shared/
+│       ├── events/                  # CanonicalEvent (v1.0.0), CanonicalFinancialEvent<T>, EventTopics
+│       └── model/financial/         # Money, Primitives, 9 Canonical Models (Payment, Transfer, Salary, Refund, Loan, LoanRepayment, Invoice, Subscription, Tax), FinancialModelValidator
 ├── architecture/                # Mermaid C4 diagrams, Hexagonal deep-dives, sequence flows
 ├── docs/                        # ADRs (ADR-001 through ADR-010), OpenAPI 3.0 yaml contracts
 ├── deployment/

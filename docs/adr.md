@@ -153,3 +153,29 @@ We implement a high-reliability Transactional Outbox pattern in `event-engine`:
 - Prevents split-brain worker race conditions and handles abandoned claims safely.
 - Eliminates duplicate execution risks at consumer boundaries.
 
+---
+
+## ADR-013: Canonical Financial Data Model, Precision Preservation, and Schema Evolution
+### Context
+Financial data exchange across multiple microservices (`event-engine`, `auth-service`, `plugin-framework`, `api-gateway`, and external integrations) requires strongly-typed, immutable, arbitrary-precision value objects and domain models. Floating-point arithmetic introduces IEEE 754 precision corruption, while unstandardized currency codes, untracked external identifiers (UPI RRN, UTR, CIN), and unmasked PII create severe regulatory compliance, accounting, and security vulnerabilities.
+### Decision
+We introduce the Canonical Financial Data Model in `shared-contracts`:
+1. **Precision & Money Value Object**: All monetary values are encapsulated in immutable `Money` records backed by `BigDecimal` (scale <= 6) and validated ISO 4217 currency codes. Floating-point types (`float`, `double`) are strictly prohibited. Arithmetic operations enforce explicit Banker's Rounding (`RoundingMode.HALF_EVEN`).
+2. **PII & Cardholder Data Protection**: Plaintext primary account numbers (PAN), Aadhaar numbers, and national tax identifiers are rejected at domain boundaries. Only masked references (e.g. `XXXXXX1234F`, `XXXX-XXXX-1234`) are retained.
+3. **Decoupled Temporal Dimensions**: `FinancialTime` records UTC-normalized occurrence (`occurredAt`), accounting value date (`valueDate`), processing timestamp (`processedAt`), and ledger recording time (`recordedAt`).
+4. **Canonical Financial Entities**: Nine canonical types (`Payment`, `Transfer`, `Salary`, `Refund`, `Loan`, `LoanRepayment`, `Invoice`, `Subscription`, `Tax`) model domain-specific rules:
+   - Payments enforce non-terminal to terminal state machines.
+   - Transfers mandate distinct source and destination accounts.
+   - Salaries prohibit inferring gross from net and validate deduction ceilings.
+   - Refunds enforce original payment ceilings and support partial refunds.
+   - Loans and repayments support non-EMI structures and itemized component sums.
+   - Invoices enforce subtotal + tax = total and partial payment tracking.
+   - Taxes support India-specific references (GSTIN, Challan CIN, TAN) and negative amounts for tax refund receivables.
+5. **Versioned Canonical Event Envelope**: `CanonicalEvent` is enhanced to schema version `1.0.0` with first-class metadata (`entityType`, `entityId`, `sourceSystem`, `occurredAt`, `recordedAt`, `correlationId`, `causationId`, `idempotencyKey`).
+6. **Backward & Forward Compatibility**: Jackson `@JsonAlias` mappings and legacy 9-argument constructors maintain 100% binary, source, and wire compatibility with legacy M1/M2 messages. Unknown fields are ignored gracefully via `@JsonIgnoreProperties(ignoreUnknown = true)`.
+### Consequences
+- Eliminates monetary rounding errors across all distributed pipelines.
+- Ensures strict compliance with PCI-DSS and privacy standards by blocking raw PII in event buses.
+- Downstream services can adopt strongly-typed domain events incrementally without breaking existing event consumers.
+
+
