@@ -129,9 +129,22 @@ jobs:
         run: docker info
 
       - name: Execute Infrastructure Integration Tests
-        run: ./gradlew integrationTest --no-daemon --stacktrace
+        run: ./gradlew integrationTest --no-daemon --info --stacktrace
 
-      - name: Upload Integration Test Reports
+      - name: Print Failing Test Summaries
+        if: failure()
+        run: |
+          echo "================================================================="
+          echo "INTEGRATION TEST FAILURE DIAGNOSTICS"
+          echo "================================================================="
+          find . -name "*.xml" -path "*/build/test-results/integrationTest/*" | while read -r file; do
+            if grep -q '<failure' "$file"; then
+              echo "--- Failing Test Suite: $file ---"
+              grep -E '<testcase|<failure' "$file"
+            fi
+          done
+
+      - name: Upload Integration Test Reports (HTML & XML)
         if: always()
         uses: actions/upload-artifact@v4
         with:

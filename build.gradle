@@ -51,7 +51,11 @@ subprojects {
         }
         jvmArgs("-Dnet.bytebuddy.experimental=true")
         testLogging {
-            events "passed", "skipped", "failed"
+            events "passed", "skipped", "failed", "standard_error"
+            exceptionFormat "full"
+            showExceptions true
+            showCauses true
+            showStackTraces true
         }
     }
 
@@ -65,7 +69,11 @@ subprojects {
         }
         jvmArgs("-Dnet.bytebuddy.experimental=true")
         testLogging {
-            events "passed", "skipped", "failed"
+            events "passed", "skipped", "failed", "standard_error"
+            exceptionFormat "full"
+            showExceptions true
+            showCauses true
+            showStackTraces true
         }
         shouldRunAfter test
     }

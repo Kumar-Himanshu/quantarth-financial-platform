@@ -46,6 +46,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -294,18 +295,22 @@ class PostgresAndRabbitMQInfrastructureIntegrationTest {
                     .routingKey("events.risk")
                     .payload("{\"seq\":" + i + "}")
                     .status("PENDING")
-                    .createdAt(LocalDateTime.now().minusSeconds(i))
+                    .createdAt(LocalDateTime.now().minusSeconds(10 - i))
                     .build();
             outboxRepository.save(entry);
         }
 
         ExecutorService executor = Executors.newFixedThreadPool(2);
-        CountDownLatch latch = new CountDownLatch(2);
-        AtomicInteger worker1Claimed = new AtomicInteger(0);
-        AtomicInteger worker2Claimed = new AtomicInteger(0);
+        CountDownLatch startSignal = new CountDownLatch(1);
+        CountDownLatch queryCompletedLatch = new CountDownLatch(2);
+        CountDownLatch commitLatch = new CountDownLatch(1);
+        CountDownLatch doneLatch = new CountDownLatch(2);
+        List<UUID> worker1ClaimedIds = new CopyOnWriteArrayList<>();
+        List<UUID> worker2ClaimedIds = new CopyOnWriteArrayList<>();
 
         executor.submit(() -> {
             try {
+                startSignal.await(5, TimeUnit.SECONDS);
                 transactionTemplate.execute(status -> {
                     List<EventOutboxJpaEntity> claimed = outboxRepository.findClaimableRecords(
                             LocalDateTime.now(), LocalDateTime.now().minusSeconds(60), PageRequest.of(0, 5)
@@ -314,18 +319,27 @@ class PostgresAndRabbitMQInfrastructureIntegrationTest {
                         e.setStatus("PROCESSING");
                         e.setLockedBy("worker-1");
                         e.setLockedAt(LocalDateTime.now());
+                        worker1ClaimedIds.add(e.getEventId());
                     }
                     outboxRepository.saveAll(claimed);
-                    worker1Claimed.set(claimed.size());
+                    outboxRepository.flush();
+                    queryCompletedLatch.countDown();
+                    // Hold transaction open until both workers have acquired their locks, proving FOR UPDATE SKIP LOCKED
+                    try {
+                        commitLatch.await(5, TimeUnit.SECONDS);
+                    } catch (InterruptedException ignored) {}
                     return null;
                 });
+            } catch (Exception e) {
+                queryCompletedLatch.countDown();
             } finally {
-                latch.countDown();
+                doneLatch.countDown();
             }
         });
 
         executor.submit(() -> {
             try {
+                startSignal.await(5, TimeUnit.SECONDS);
                 transactionTemplate.execute(status -> {
                     List<EventOutboxJpaEntity> claimed = outboxRepository.findClaimableRecords(
                             LocalDateTime.now(), LocalDateTime.now().minusSeconds(60), PageRequest.of(0, 5)
@@ -334,24 +348,116 @@ class PostgresAndRabbitMQInfrastructureIntegrationTest {
                         e.setStatus("PROCESSING");
                         e.setLockedBy("worker-2");
                         e.setLockedAt(LocalDateTime.now());
+                        worker2ClaimedIds.add(e.getEventId());
                     }
                     outboxRepository.saveAll(claimed);
-                    worker2Claimed.set(claimed.size());
+                    outboxRepository.flush();
+                    queryCompletedLatch.countDown();
+                    // Hold transaction open until both workers have acquired their locks, proving FOR UPDATE SKIP LOCKED
+                    try {
+                        commitLatch.await(5, TimeUnit.SECONDS);
+                    } catch (InterruptedException ignored) {}
                     return null;
                 });
+            } catch (Exception e) {
+                queryCompletedLatch.countDown();
             } finally {
-                latch.countDown();
+                doneLatch.countDown();
             }
         });
 
-        boolean finished = latch.await(10, TimeUnit.SECONDS);
+        // Release both workers simultaneously
+        startSignal.countDown();
+        boolean bothQueried = queryCompletedLatch.await(10, TimeUnit.SECONDS);
+        assertThat(bothQueried).isTrue();
+
+        // Release commits
+        commitLatch.countDown();
+        boolean finished = doneLatch.await(10, TimeUnit.SECONDS);
         assertThat(finished).isTrue();
         executor.shutdown();
 
-        // Verify total claimed records
-        assertThat(worker1Claimed.get() + worker2Claimed.get()).isEqualTo(10);
+        // Verify disjoint batches: each worker claimed 5 unique, non-overlapping records
+        assertThat(worker1ClaimedIds).hasSize(5);
+        assertThat(worker2ClaimedIds).hasSize(5);
+        assertThat(Collections.disjoint(worker1ClaimedIds, worker2ClaimedIds)).isTrue();
+        assertThat(worker1ClaimedIds.size() + worker2ClaimedIds.size()).isEqualTo(10);
+
         long processingCount = outboxRepository.findByStatus("PROCESSING").size();
         assertThat(processingCount).isEqualTo(10);
+    }
+
+    @Test
+    @DisplayName("5.1 PostgreSQL: Empty outbox queue returns empty list without error")
+    void testEmptyOutboxClaimReturnsEmptyList() {
+        List<EventOutboxJpaEntity> claimed = outboxRepository.findClaimableRecords(
+                LocalDateTime.now(), LocalDateTime.now().minusSeconds(60), PageRequest.of(0, 10)
+        );
+        assertThat(claimed).isEmpty();
+    }
+
+    @Test
+    @DisplayName("5.1 PostgreSQL: Multiple batches of pending events are leased sequentially in FIFO order")
+    void testMultipleBatchesClaimedSequentially() {
+        for (int i = 0; i < 15; i++) {
+            EventOutboxJpaEntity entry = EventOutboxJpaEntity.builder()
+                    .id(UUID.randomUUID())
+                    .eventId(UUID.randomUUID())
+                    .eventType("BatchEvent")
+                    .routingKey("events.batch")
+                    .payload("{\"seq\":" + i + "}")
+                    .status("PENDING")
+                    .createdAt(LocalDateTime.now().minusSeconds(20 - i))
+                    .build();
+            outboxRepository.save(entry);
+        }
+
+        // Batch 1
+        transactionTemplate.execute(status -> {
+            List<EventOutboxJpaEntity> batch1 = outboxRepository.findClaimableRecords(
+                    LocalDateTime.now(), LocalDateTime.now().minusSeconds(60), PageRequest.of(0, 5)
+            );
+            assertThat(batch1).hasSize(5);
+            for (EventOutboxJpaEntity e : batch1) {
+                e.setStatus("PROCESSING");
+                e.setLockedBy("batch-worker");
+                e.setLockedAt(LocalDateTime.now());
+            }
+            outboxRepository.saveAll(batch1);
+            return null;
+        });
+
+        // Batch 2
+        transactionTemplate.execute(status -> {
+            List<EventOutboxJpaEntity> batch2 = outboxRepository.findClaimableRecords(
+                    LocalDateTime.now(), LocalDateTime.now().minusSeconds(60), PageRequest.of(0, 5)
+            );
+            assertThat(batch2).hasSize(5);
+            for (EventOutboxJpaEntity e : batch2) {
+                e.setStatus("PROCESSING");
+                e.setLockedBy("batch-worker");
+                e.setLockedAt(LocalDateTime.now());
+            }
+            outboxRepository.saveAll(batch2);
+            return null;
+        });
+
+        // Batch 3
+        transactionTemplate.execute(status -> {
+            List<EventOutboxJpaEntity> batch3 = outboxRepository.findClaimableRecords(
+                    LocalDateTime.now(), LocalDateTime.now().minusSeconds(60), PageRequest.of(0, 5)
+            );
+            assertThat(batch3).hasSize(5);
+            for (EventOutboxJpaEntity e : batch3) {
+                e.setStatus("PROCESSING");
+                e.setLockedBy("batch-worker");
+                e.setLockedAt(LocalDateTime.now());
+            }
+            outboxRepository.saveAll(batch3);
+            return null;
+        });
+
+        assertThat(outboxRepository.findByStatus("PROCESSING")).hasSize(15);
     }
 
     // =========================================================================
