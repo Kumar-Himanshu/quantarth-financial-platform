@@ -178,4 +178,34 @@ We introduce the Canonical Financial Data Model in `shared-contracts`:
 - Ensures strict compliance with PCI-DSS and privacy standards by blocking raw PII in event buses.
 - Downstream services can adopt strongly-typed domain events incrementally without breaking existing event consumers.
 
+---
+
+## ADR-014: Canonical Financial Persistence, Database-Level Idempotency, and Refund Integrity Concurrency Controls
+### Context
+Milestone 3A established domain models and validation rules for nine canonical financial entities. In Milestone 3B, these events must be ingested, persisted, deduplicated, and published via the existing `event-engine` microservice. High-volume fintech platforms face concurrency hazards:
+1. Re-entrant or concurrent requests reusing an idempotency key with conflicting payloads.
+2. Concurrent refund requests racing against captured payment capacity, potentially causing financial overdrafts.
+3. Database sprawl if each financial entity type were given an isolated relational table without OLTP requirement.
+4. Tenant isolation bypass if client-supplied tenant identifiers were trusted.
+### Decision
+1. **Unified JSONB Persistence**:
+   - Rather than creating nine distinct relational tables, `financial_events` is extended with dedicated indexed metadata columns (`entity_type`, `entity_id`, `schema_version`, `source_system`, `occurred_at`, `recorded_at`, `correlation_id`, `causation_id`, `idempotency_key`, `payload_hash`) while storing the validated typed domain model in native PostgreSQL `JSONB`.
+   - Migration `V4__canonical_financial_events.sql` is strictly additive with historical row backfill.
+2. **Database-Level Idempotency Enforcement**:
+   - A composite unique index on `(tenant_id, source_system, idempotency_key)` guarantees deduplication at the ACID database layer.
+   - Incoming payloads compute a SHA-256 `payload_hash`. Identical retried requests return the existing persisted event without duplicate processing. Key reuse with altered payloads produces an explicit RFC 7807 `409 Conflict`.
+3. **Refund Integrity and Pessimistic Concurrency**:
+   - Refunds execute within a Spring `@Transactional` boundary and acquire a `PESSIMISTIC_WRITE` lock on the target payment record via `findPaymentForUpdate(tenantId, paymentId)`.
+   - Cumulative pending and completed refunds are tracked against captured payment balances, immediately reserving refundable capacity upon ingestion.
+4. **Normalized Event Routing**:
+   - Routing keys follow the normalized schema `financial.events.<entityType>.<action>`.
+   - Legacy platform events retain their existing routing prefixes (`auth.events.*`, `plugin.events.*`, `ai.events.*`).
+5. **Strict Tenant Context Isolation**:
+   - `TenantContext` is non-negotiable. Incoming events attempting to specify a `tenantId` different from the authenticated context are rejected with RFC 7807 `403 Forbidden`.
+### Consequences
+- Prevents double-spend and overdrafts during parallel refund execution.
+- Guarantees idempotent exactly-once processing semantics at database boundaries.
+- Provides high search and audit throughput via tenant-scoped indexes without relational schema gridlock.
+
+
 

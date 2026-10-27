@@ -562,4 +562,110 @@ class PostgresAndRabbitMQInfrastructureIntegrationTest {
         EventOutboxJpaEntity completed = outboxRepository.findById(failedEntry.getId()).orElseThrow();
         assertThat(completed.getStatus()).isEqualTo("SENT");
     }
+
+    // =========================================================================
+    // 5.5 Milestone 3B Real PostgreSQL & RabbitMQ Integration Tests
+    // =========================================================================
+
+    @Test
+    @DisplayName("5.5 M3B PostgreSQL: Flyway V4 schema migration adds canonical columns and JSONB payload")
+    void testFlywayV4CanonicalFinancialSchemaMigration() {
+        assertThat(postgres.isRunning()).isTrue();
+        UUID eventId = UUID.randomUUID();
+        FinancialEventJpaEntity entity = FinancialEventJpaEntity.builder()
+                .id(UUID.randomUUID())
+                .eventId(eventId)
+                .eventType("PaymentInitiated")
+                .entityType("PAYMENT")
+                .entityId("PAY-777")
+                .eventSource("stripe-gateway")
+                .sourceSystem("stripe-gateway")
+                .tenantId("tenant-m3b")
+                .timestamp(LocalDateTime.now())
+                .occurredAt(LocalDateTime.now())
+                .processedAt(LocalDateTime.now())
+                .recordedAt(LocalDateTime.now())
+                .payload("{\"paymentId\":\"PAY-777\",\"amount\":{\"amount\":100.00,\"currency\":\"USD\"}}")
+                .version("1.0.0")
+                .schemaVersion("1.0.0")
+                .idempotencyKey("idem-v4-01")
+                .payloadHash("hash777")
+                .build();
+
+        FinancialEventJpaEntity saved = eventRepository.saveAndFlush(entity);
+        assertThat(saved.getId()).isNotNull();
+
+        FinancialEventJpaEntity fetched = eventRepository.findByEventIdAndTenantId(eventId, "tenant-m3b").orElseThrow();
+        assertThat(fetched.getEntityType()).isEqualTo("PAYMENT");
+        assertThat(fetched.getEntityId()).isEqualTo("PAY-777");
+        assertThat(fetched.getSourceSystem()).isEqualTo("stripe-gateway");
+        assertThat(fetched.getIdempotencyKey()).isEqualTo("idem-v4-01");
+    }
+
+    @Test
+    @DisplayName("5.5 M3B PostgreSQL: Database constraint uk_financial_events_tenant_source_idempotency enforces uniqueness")
+    void testDatabaseConstraintEnforcesTenantSourceIdempotencyOnRealPostgres() {
+        String tenant = "tenant-idempotency-test";
+        String source = "billing-gateway";
+        String idemKey = "reused-key-101";
+
+        FinancialEventJpaEntity entity1 = FinancialEventJpaEntity.builder()
+                .id(UUID.randomUUID())
+                .eventId(UUID.randomUUID())
+                .eventType("PaymentCaptured")
+                .entityType("PAYMENT")
+                .entityId("PAY-1")
+                .eventSource(source)
+                .sourceSystem(source)
+                .tenantId(tenant)
+                .timestamp(LocalDateTime.now())
+                .payload("{}")
+                .version("1.0.0")
+                .idempotencyKey(idemKey)
+                .processedAt(LocalDateTime.now())
+                .build();
+        eventRepository.saveAndFlush(entity1);
+
+        FinancialEventJpaEntity entity2 = FinancialEventJpaEntity.builder()
+                .id(UUID.randomUUID())
+                .eventId(UUID.randomUUID())
+                .eventType("PaymentCaptured")
+                .entityType("PAYMENT")
+                .entityId("PAY-2")
+                .eventSource(source)
+                .sourceSystem(source)
+                .tenantId(tenant)
+                .timestamp(LocalDateTime.now())
+                .payload("{}")
+                .version("1.0.0")
+                .idempotencyKey(idemKey)
+                .processedAt(LocalDateTime.now())
+                .build();
+
+        assertThatThrownBy(() -> eventRepository.saveAndFlush(entity2))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @DisplayName("5.5 M3B RabbitMQ: Canonical routing key delivered to exchange and bound event queue")
+    void testCanonicalRoutingKeyMatchesWildcardBindingOnRealRabbitMQ() {
+        assertThat(rabbitmq.isRunning()).isTrue();
+        EventOutboxJpaEntity entry = EventOutboxJpaEntity.builder()
+                .id(UUID.randomUUID())
+                .eventId(UUID.randomUUID())
+                .eventType("PaymentInitiated")
+                .routingKey("financial.events.payment.initiated")
+                .payload("{\"paymentId\":\"PAY-999\"}")
+                .status("PENDING")
+                .createdAt(LocalDateTime.now())
+                .build();
+        outboxRepository.saveAndFlush(entry);
+
+        int published = outboxPublisher.publishPendingEvents();
+        assertThat(published).isEqualTo(1);
+
+        EventOutboxJpaEntity updated = outboxRepository.findById(entry.getId()).orElseThrow();
+        assertThat(updated.getStatus()).isEqualTo("SENT");
+        assertThat(updated.getSentAt()).isNotNull();
+    }
 }

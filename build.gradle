@@ -58,6 +58,8 @@ subprojects {
     tasks.register('integrationTest', Test) {
         description = 'Runs infrastructure-backed integration tests with Testcontainers.'
         group = 'verification'
+        testClassesDirs = sourceSets.test.output.classesDirs
+        classpath = sourceSets.test.runtimeClasspath
         useJUnitPlatform {
             includeTags 'integration'
         }
