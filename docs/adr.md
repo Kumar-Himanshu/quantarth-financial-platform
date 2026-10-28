@@ -207,5 +207,111 @@ Milestone 3A established domain models and validation rules for nine canonical f
 - Guarantees idempotent exactly-once processing semantics at database boundaries.
 - Provides high search and audit throughput via tenant-scoped indexes without relational schema gridlock.
 
+---
+
+## ADR-015: Dedicated Ingestion Microservice (`ingestion-service`) vs Event Engine Co-Location
+### Context
+Financial data ingestion involves handling untrusted, heterogeneous external data sources (CSV spreadsheets, JSON webhook streams, legacy ERP exports) with variable schemas, potential payload corruptions, and large file sizes (up to 25 MB). We evaluated whether to extend the existing `event-engine` (Option A) or introduce a dedicated `ingestion-service` (Option B).
+### Decision
+We introduce an independent microservice: `ingestion-service` (Spring Boot 3.3.1, Java 21, Hexagonal Architecture) owning its private PostgreSQL database (`fip_ingestion`).
+1. **Fault & Blast Radius Isolation**: Memory-intensive streaming CSV parsing and schema normalization errors are strictly isolated from the core event ledger and outbox publisher.
+2. **Database Separation (ADR-004)**: Ephemeral job tracking tables (`ingestion_jobs`, `ingestion_job_records`) have a 90-day retention policy, while `financial_events` requires a 10-year immutable audit lifecycle.
+3. **Single Responsibility**: `ingestion-service` is an ETL and normalization engine; `event-engine` is the immutable canonical event store.
+### Consequences
+- Requires one additional Spring Boot service container in Docker Compose and CI matrix.
+- `event-engine` remains completely decoupled from external bank statement formats and parsing dependencies.
+- Reuses `event-engine`'s battle-tested `POST /api/v1/events/canonical/batch` endpoint without code duplication.
+
+---
+
+## ADR-016: Synchronous vs Database-Backed Asynchronous Batch Processing with Resumable Staging
+### Context
+Financial records may arrive as small webhook bursts (1–50 records) requiring immediate synchronous confirmation, or as large batch exports (up to 50,000 rows in CSV) that would time out standard HTTP gateway connections. If an application restarts during an asynchronous batch, processing must resume without duplicating canonical events.
+### Decision
+We implement a hybrid processing model:
+1. **Synchronous Ingestion**: Available for JSON streams when record count is $\le 50$ and the client specifies `?sync=true`. Validation, normalization, and canonical persistence complete within the HTTP request lifecycle, returning `200 OK`.
+2. **Database-Backed Asynchronous Ingestion**: Default for all file uploads (`POST /api/v1/ingestion/csv`) and large JSON batches. Immediately streams payload to bounded local staging, persists an `ingestion_jobs` record (`status = 'RECEIVED'`, `last_processed_row = 0`), returns `202 Accepted` with a `jobId`, and processes the file via streaming worker chunks of 100 rows.
+3. **Resumable Progress**: Every chunk commit updates `last_processed_row` and `heartbeat_at` in `ingestion_jobs`. Crashed workers resume streaming from `last_processed_row + 1` upon restart.
+### Consequences
+- Avoids gateway timeouts (HTTP 504) during multi-megabyte file uploads.
+- Enables clients to poll job progress and fetch granular row-level error reports without holding open HTTP connections.
+- Guarantees crash recovery without re-executing already committed canonical events.
+
+---
+
+## ADR-017: Bounded Ephemeral Staging, Configurable Retention, and Permanent Audit Summaries
+### Context
+External source files often contain sensitive PII. Retaining raw files indefinitely violates data minimization, yet processing asynchronously requires temporary file durability for restart recovery. Mandatory database partitioning in MVP introduces unnecessary DDL complexity.
+### Decision
+1. **Bounded Ephemeral Staging Volume**: Uploaded CSV files stream to `/var/data/ingestion/staging/{tenant_id}/{job_id}.csv.stage` with restricted permissions (`chmod 0600`), 25 MB file cap, and 10 GB partition ceiling. Files are securely wiped immediately upon job completion or failure.
+2. **Standard Indexed PostgreSQL Tables**: `ingestion_job_records` is implemented as an ordinary PostgreSQL table with composite B-tree indexes, removing mandatory monthly partitioning from the MVP.
+3. **Configurable Ephemeral Retention**: Detailed error and itemized records in `ingestion_job_records` are retained for a configurable period (default proposed: 90 days) and pruned via daily off-peak chunked deletes (1,000 rows/batch).
+4. **Permanent Audit Metadata**: The master record in `ingestion_jobs` (counters, file hash, mapping version, timing, and error code summary) is retained indefinitely (or minimum 1 year), providing compliance auditability without storing raw payloads.
+### Consequences
+- Eliminates cloud object storage costs (S3/GCS) during MVP.
+- Resolves the contradiction between async processing and zero-file durability.
+- Complies with data minimization standards (GDPR, India DPDP Act) while maintaining full regulatory auditability.
+
+---
+
+## ADR-018: Declarative Source Mapping Profiles
+### Context
+Banking and financial CSV formats vary drastically across financial institutions (e.g. HDFC uses `Withdrawal Amt.` / `Deposit Amt.`, ICICI uses single `Amount` with `Type`, Stripe uses integer cents). Hardcoding parser logic per bank in Java code creates unmaintainable code sprawl.
+### Decision
+We implement a **Declarative Mapping Engine** driven by tenant-scoped `source_mapping_profiles`:
+1. Profiles define source column names, date formats (e.g. `dd/MM/yyyy`), timezones (e.g. `Asia/Kolkata`), currency defaults, and transformation strategies (`SPLIT_DR_CR`, `SIGNED_AMOUNT`, `STATIC_DEFAULT`, `REGEX_EXTRACT`).
+2. Mappings are stored in PostgreSQL JSONB and validated at profile creation time.
+3. Parsers execute the declarative rules to map raw string tokens into canonical financial models (`Payment`, `Refund`, etc.).
+### Consequences
+- New bank statement layouts can be supported dynamically via API configuration without code deployments or server restarts.
+- Domain models remain 100% agnostic to external banking column names.
+
+---
+
+## ADR-019: Ingestion-Side Holding & Reconciliation Review Queue for External Refunds
+### Context
+QuantArth is a Financial Intelligence Platform, not a payment gateway. External financial feeds frequently report refunds for payments that occurred externally prior to QuantArth onboarding. Persisting an unverified refund directly into `financial_events` pollutes the authoritative ledger, whereas rejecting it prevents financial intelligence. Synthetic dummy payments must never be fabricated.
+### Decision
+We establish a strict separation between **Ingestion Acceptance** and **Canonical Event Acceptance**:
+1. **Local Payment Exists**: If the referenced payment exists in `financial_events`, M3B's pessimistic row lock validates remaining capacity and currency. The refund is verified, forwarded to `event-engine`, and marked `ACCEPTED`.
+2. **Local Payment Absent**: If the payment does not exist in local persistence, the refund is accepted at the ingestion layer only. It is stored in `ingestion_job_records` with status `UNVERIFIED_EXTERNAL` and review state `PENDING_RECONCILIATION`. It is **NOT** forwarded to `event-engine` as a canonical event.
+3. **Reconciliation Transitions**:
+   - Automated reconciliation matches newly ingested historical payments and promotes the refund to `RECONCILED_VERIFIED`, forwarding it to `event-engine`.
+   - Authorized operators can manually approve unverified refunds via `POST /api/v1/ingestion/reconciliation/refunds/{recordId}/approve` with audit justification (`HISTORICAL_EXTERNAL_PRE_QUANTARTH`).
+### Consequences
+- Preserves 100% of M3B refund integrity invariants without weakening canonical validation rules.
+- Prevents unverified ledger pollution while capturing real-world external financial events for reconciliation.
+
+---
+
+## ADR-020: Internal REST Mesh Authentication via Service Identity and M2A HMAC Signer
+### Context
+`ingestion-service` must transfer batches of validated canonical events to `event-engine`. Directly accessing `fip_events` violates ADR-004. Inter-service calls must authenticate securely without assuming gateway-only credentials.
+### Decision
+`ingestion-service` authenticates to `event-engine`'s existing `POST /api/v1/events/canonical/batch` endpoint using its own distinct internal service identity signed via the M2A HMAC-SHA256 protocol:
+1. **Service Identity Context**: `X-User-Subject: service:ingestion-service`, `X-User-Id: system:ingestion-service`, `X-User-Roles: ROLE_INTERNAL_SERVICE`, and propagated caller `X-Tenant-Id`.
+2. **Cryptographic Signature**: `ingestion-service` configures `RequestHmacSigner` from `shared-contracts` with `activeKeyId = "v1"` and shared internal secret `${GATEWAY_INTERNAL_SECRET}`.
+3. **Integrity & Anti-Replay**: Every batch request includes a unique UUID nonce, current UTC timestamp, and SHA-256 payload digest.
+### Consequences
+- Requires zero modifications to `GatewayAuthenticationFilter` in `event-engine`.
+- 100% compliant with M2A zero-trust internal service authentication without gateway bypass vulnerabilities.
+
+---
+
+## ADR-021: Multi-Tier Deduplication and Advisory File Fingerprinting
+### Context
+Duplicate financial records can occur across HTTP retries, re-uploaded CSV files, duplicate rows within a single spreadsheet, or overlapping bank export date ranges. A hard database unique constraint on `(tenant_id, file_hash)` breaks legitimate re-processing when a job fails, a mapping profile changes, or a user forces a re-upload.
+### Decision
+We remove the database unique constraint on file hash and establish a 4-tier deduplication hierarchy:
+1. **Tier 1 (Request Idempotency)**: `Idempotency-Key` header with 24-hour cache replay.
+2. **Tier 2 (Upload File Fingerprinting - Advisory)**: SHA-256 file checksum stored with an index on `(tenant_id, file_hash)`. Duplicate file uploads are blocked by domain logic only if a previous job successfully `COMPLETED` with the same mapping profile version. Re-upload is explicitly allowed if the previous job `FAILED`, the mapping profile version changed, or the client supplies `force=true`.
+3. **Tier 3 (Source Transaction Identity)**: Composite check on `(tenant_id, source_system, source_record_id)` flags already ingested records as `DUPLICATE` in `ingestion_job_records` and skips canonical forwarding.
+4. **Tier 4 (Canonical Event Idempotency - ACID Ledger)**: M3B PostgreSQL composite unique index on `(tenant_id, source_system, idempotency_key)` guarantees zero duplicates at the final event ledger.
+### Consequences
+- Eliminates database blocks on legitimate file re-processing.
+- Provides defense-in-depth against duplicate financial transactions across all ingest channels.
+
+
+
 
 

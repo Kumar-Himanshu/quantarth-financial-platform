@@ -1,0 +1,39 @@
+spring:
+  application:
+    name: ingestion-service-test
+  datasource:
+    url: jdbc:h2:mem:fip_ingestion_test;DB_CLOSE_DELAY=-1;MODE=PostgreSQL
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ''
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+  flyway:
+    enabled: false
+
+event-engine:
+  url: http://localhost:8083
+
+gateway:
+  internal:
+    active-key-id: v1
+    secret: ci_test_internal_mesh_secret_2026_min_32_characters
+
+ingestion:
+  staging:
+    directory: ./build/test-staging
+  limits:
+    max-file-size-mb: 25
+    max-records: 50000
+    sync-batch-limit: 50
+  retention:
+    records-days: 90
+    jobs-days: 365
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

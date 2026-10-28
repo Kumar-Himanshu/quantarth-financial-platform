@@ -51,6 +51,17 @@ spring:
                 capacity: 300
             - name: JwtValidationFilter
 
+        # Ingestion Service (Protected by JWT and Rate Limit)
+        - id: ingestion-service
+          uri: ${INGESTION_SERVICE_URI:http://localhost:8084}
+          predicates:
+            - Path=/api/v1/ingestion/**
+          filters:
+            - name: RateLimitingFilter
+              args:
+                capacity: 100
+            - name: JwtValidationFilter
+
         # AI Service (Protected by JWT and Rate Limit)
         - id: ai-service
           uri: ${AI_SERVICE_URI:http://localhost:8000}

@@ -1,0 +1,54 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: ingestion-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/fip_ingestion}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 30MB
+
+event-engine:
+  url: ${EVENT_ENGINE_URI:http://localhost:8083}
+
+gateway:
+  internal:
+    active-key-id: ${GATEWAY_ACTIVE_KEY_ID:v1}
+    secret: ${GATEWAY_INTERNAL_SECRET:quantarth-fip-internal-mesh-secret-2026}
+
+ingestion:
+  staging:
+    directory: ${INGESTION_STAGING_DIR:/var/data/ingestion/staging}
+  limits:
+    max-file-size-mb: 25
+    max-records: 50000
+    sync-batch-limit: 50
+  retention:
+    records-days: 90
+    jobs-days: 365
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
