@@ -35,6 +35,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -258,7 +259,7 @@ class IngestionPostgreSqlInfrastructureIntegrationTest {
     // =========================================================================
 
     @Test
-    @DisplayName("PostgreSQL: Job counters and status updates persist accurately")
+    @DisplayName("PostgreSQL: Job counters and status updates persist accurately (partially completed when rejections exist)")
     void testJobCountersAndStatusPersistence() {
         String tenantId = "tenant-counters";
         IngestionJobJpaEntity job = jobService.createJob(
@@ -292,8 +293,144 @@ class IngestionPostgreSqlInfrastructureIntegrationTest {
         jobService.completeJob(job.getJobId(), null);
 
         IngestionJobJpaEntity finished = jobRepository.findById(job.getJobId()).orElseThrow();
-        assertThat(finished.getStatus()).isEqualTo(JobStatus.COMPLETED);
+        // Correct business semantics: With rejectedRecords = 3 (> 0), job is PARTIALLY_COMPLETED per M4A spec
+        assertThat(finished.getStatus()).isEqualTo(JobStatus.PARTIALLY_COMPLETED);
         assertThat(finished.getCompletedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("PostgreSQL Lifecycle 1: All records accepted results in COMPLETED status")
+    void testAllRecordsAcceptedCompletesJob() {
+        String tenantId = "tenant-lifecycle-all-acc";
+        IngestionJobJpaEntity job = jobService.createJob(
+                tenantId, SourceType.JSON, "GATEWAY", "clean.json", "hash-clean", null, null, 1, 100);
+
+        jobService.incrementCounters(job.getJobId(), 100, 100, 0, 0, 0, 100);
+        jobService.completeJob(job.getJobId(), null);
+
+        IngestionJobJpaEntity finished = jobRepository.findById(job.getJobId()).orElseThrow();
+        assertThat(finished.getStatus()).isEqualTo(JobStatus.COMPLETED);
+        assertThat(finished.getAcceptedRecords()).isEqualTo(100);
+        assertThat(finished.getRejectedRecords()).isEqualTo(0);
+        assertThat(finished.getUnverifiedRecords()).isEqualTo(0);
+        assertThat(finished.getDuplicateRecords()).isEqualTo(0);
+        assertThat(finished.getCompletedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("PostgreSQL Lifecycle 2: Some records rejected results in PARTIALLY_COMPLETED status")
+    void testSomeRecordsRejectedPartiallyCompletesJob() {
+        String tenantId = "tenant-lifecycle-partial";
+        IngestionJobJpaEntity job = jobService.createJob(
+                tenantId, SourceType.CSV, "BANK", "mixed.csv", "hash-mixed", null, null, 1, 50);
+
+        jobService.incrementCounters(job.getJobId(), 50, 45, 0, 5, 0, 50);
+        jobService.completeJob(job.getJobId(), "5 items rejected due to invalid format");
+
+        IngestionJobJpaEntity finished = jobRepository.findById(job.getJobId()).orElseThrow();
+        assertThat(finished.getStatus()).isEqualTo(JobStatus.PARTIALLY_COMPLETED);
+        assertThat(finished.getAcceptedRecords()).isEqualTo(45);
+        assertThat(finished.getRejectedRecords()).isEqualTo(5);
+        assertThat(finished.getErrorSummary()).isEqualTo("5 items rejected due to invalid format");
+        assertThat(finished.getCompletedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("PostgreSQL Lifecycle 3: Duplicate records acknowledge idempotently with COMPLETED status")
+    void testDuplicateRecordsPreserveCompletion() {
+        String tenantId = "tenant-lifecycle-dup";
+        IngestionJobJpaEntity job = jobService.createJob(
+                tenantId, SourceType.JSON, "PORTAL", "dups.json", "hash-dup", null, null, 1, 30);
+
+        // 30 processed: 20 newly accepted, 10 duplicates acknowledged, 0 rejected
+        jobService.incrementCounters(job.getJobId(), 30, 20, 0, 0, 10, 30);
+        jobService.completeJob(job.getJobId(), null);
+
+        IngestionJobJpaEntity finished = jobRepository.findById(job.getJobId()).orElseThrow();
+        assertThat(finished.getStatus()).isEqualTo(JobStatus.COMPLETED);
+        assertThat(finished.getAcceptedRecords()).isEqualTo(20);
+        assertThat(finished.getDuplicateRecords()).isEqualTo(10);
+        assertThat(finished.getRejectedRecords()).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("PostgreSQL Lifecycle 4: Unverified external refunds preserved in review storage with COMPLETED job status")
+    void testUnverifiedExternalRefundsPreserveCompletion() {
+        String tenantId = "tenant-lifecycle-unverified";
+        IngestionJobJpaEntity job = jobService.createJob(
+                tenantId, SourceType.CSV, "GATEWAY", "refunds.csv", "hash-unv", null, null, 1, 20);
+
+        // 20 processed: 16 accepted, 4 unverified external refunds held for reconciliation, 0 rejected
+        jobService.incrementCounters(job.getJobId(), 20, 16, 4, 0, 0, 20);
+        jobService.completeJob(job.getJobId(), null);
+
+        IngestionJobJpaEntity finished = jobRepository.findById(job.getJobId()).orElseThrow();
+        assertThat(finished.getStatus()).isEqualTo(JobStatus.COMPLETED);
+        assertThat(finished.getAcceptedRecords()).isEqualTo(16);
+        assertThat(finished.getUnverifiedRecords()).isEqualTo(4);
+        assertThat(finished.getRejectedRecords()).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("PostgreSQL Lifecycle 5: Zero-record job completes safely with COMPLETED status")
+    void testZeroRecordJobCompletion() {
+        String tenantId = "tenant-lifecycle-zero";
+        IngestionJobJpaEntity job = jobService.createJob(
+                tenantId, SourceType.CSV, "BANK", "empty.csv", "hash-empty", null, null, 1, 0);
+
+        jobService.completeJob(job.getJobId(), null);
+
+        IngestionJobJpaEntity finished = jobRepository.findById(job.getJobId()).orElseThrow();
+        assertThat(finished.getStatus()).isEqualTo(JobStatus.COMPLETED);
+        assertThat(finished.getTotalRecords()).isEqualTo(0);
+        assertThat(finished.getProcessedRecords()).isEqualTo(0);
+        assertThat(finished.getAcceptedRecords()).isEqualTo(0);
+        assertThat(finished.getRejectedRecords()).isEqualTo(0);
+        assertThat(finished.getCompletedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("PostgreSQL Lifecycle 6: Processing failure marks job FAILED with error summary")
+    void testProcessingFailureMarksJobFailed() {
+        String tenantId = "tenant-lifecycle-fail";
+        IngestionJobJpaEntity job = jobService.createJob(
+                tenantId, SourceType.CSV, "BANK", "corrupt.csv", "hash-fail", null, null, 1, 100);
+
+        jobService.failJob(job.getJobId(), "Disk I/O error: staged file unreadable at row 42");
+
+        IngestionJobJpaEntity finished = jobRepository.findById(job.getJobId()).orElseThrow();
+        assertThat(finished.getStatus()).isEqualTo(JobStatus.FAILED);
+        assertThat(finished.getErrorSummary()).isEqualTo("Disk I/O error: staged file unreadable at row 42");
+        assertThat(finished.getCompletedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("PostgreSQL Lifecycle 7: Persisted counters and status verified via raw SQL database reload")
+    void testPersistedCountersAndFinalStatusDatabaseReload() {
+        String tenantId = "tenant-lifecycle-sql";
+        IngestionJobJpaEntity job = jobService.createJob(
+                tenantId, SourceType.CSV, "BANK", "reload.csv", "hash-reload", null, null, 1, 75);
+
+        jobService.incrementCounters(job.getJobId(), 75, 60, 5, 8, 2, 75);
+        jobService.completeJob(job.getJobId(), "8 records quarantined due to schema validation failure");
+
+        // Bypass JPA cache and query PostgreSQL directly via JDBC
+        Map<String, Object> row = jdbcTemplate.queryForMap(
+                "SELECT status, total_records, processed_records, accepted_records, " +
+                "       unverified_records, rejected_records, duplicate_records, error_summary, completed_at " +
+                "FROM ingestion_jobs WHERE job_id = ?",
+                job.getJobId()
+        );
+
+        assertThat(row.get("status")).isEqualTo("PARTIALLY_COMPLETED");
+        assertThat(((Number) row.get("total_records")).intValue()).isEqualTo(75);
+        assertThat(((Number) row.get("processed_records")).intValue()).isEqualTo(75);
+        assertThat(((Number) row.get("accepted_records")).intValue()).isEqualTo(60);
+        assertThat(((Number) row.get("unverified_records")).intValue()).isEqualTo(5);
+        assertThat(((Number) row.get("rejected_records")).intValue()).isEqualTo(8);
+        assertThat(((Number) row.get("duplicate_records")).intValue()).isEqualTo(2);
+        assertThat(row.get("error_summary")).isEqualTo("8 records quarantined due to schema validation failure");
+        assertThat(row.get("completed_at")).isNotNull();
     }
 
     // =========================================================================

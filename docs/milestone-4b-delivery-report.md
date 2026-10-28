@@ -191,7 +191,8 @@ The repository GitHub Actions workflow `.github/workflows/ci.yml` contains three
 ### 6. Files Changed and Created
 
 #### New Verification Test Suites:
-- `ingestion-service/src/test/java/com/fip/ingestion/infrastructure/IngestionPostgreSqlInfrastructureIntegrationTest.java`
+- `ingestion-service/src/test/java/com/fip/ingestion/infrastructure/IngestionPostgreSqlInfrastructureIntegrationTest.java` (PostgreSQL 16 Testcontainers suite with 7 lifecycle regression cases)
+- `ingestion-service/src/test/java/com/fip/ingestion/integration/IngestionJobLifecycleTest.java` (Comprehensive 7-case job lifecycle unit regression suite)
 - `ingestion-service/src/test/java/com/fip/ingestion/integration/EventEngineIntegrationVerificationTest.java`
 - `ingestion-service/src/test/java/com/fip/ingestion/integration/RestartRecoveryIntegrationTest.java`
 - `ingestion-service/src/test/java/com/fip/ingestion/mapping/FinancialDataIntegrityTest.java`
@@ -224,10 +225,10 @@ The repository GitHub Actions workflow `.github/workflows/ci.yml` contains three
 
 ### 8. Milestone Acceptance Status
 
-**M4B Implementation Status: COMPLETE**
+**M4B CI Fix Status: COMPLETE**
 
-**M4B Integration Verification: PASSED**
+**Infrastructure Integration Tests: PENDING**
 
-**M4B CI Validation: PASSED**
+**M4B Acceptance: PENDING until all required CI workflows pass**
 
 **M4C Implementation: NOT STARTED**
